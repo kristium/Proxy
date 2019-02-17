@@ -15,21 +15,20 @@ const charset = /^[a-zA-Z0-9\-.]*$/;
 const servers = {};
 const reqs = {};
 
-function genID(len = 64){
+function genID(len = 64) {
     let charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let id = "";
-    for(let i = 0; i<len; i++){
-        id += charset[Math.floor(Math.random()*charset.length)];
+    for (let i = 0; i < len; i++) {
+        id += charset[Math.floor(Math.random() * charset.length)];
     }
     return id
 }
 
 
-
 function getA(address) {
     address = address.replace(/\.kst$/, "");
     return new Promise((resolve, reject) => {
-        request.get(config.kristNode+"names/" + address)
+        request.get(config.kristNode + "names/" + address)
             .then(r => {
                 let b = r.body;
                 if (b.ok) {
@@ -51,11 +50,11 @@ app.ws("/", function (ws, req) {
     ws.ip = ws.ip.replace(/^.*:/, '');
     servers[ws.ip] = ws;
     console.log("New connection", ws.ip);
-    let pingInt = setInterval(()=>{
+    let pingInt = setInterval(() => {
         ws.send(JSON.stringify({
             type: "ping",
         }))
-    }, 10*1000);
+    }, 10 * 1000);
     ws.on('message', function (data) {
         try {
             data = JSON.parse(data);
@@ -69,11 +68,12 @@ app.ws("/", function (ws, req) {
         }
         if (!data) return false;
         console.log(data);
-        switch(data.type){
+        switch (data.type) {
             case "request":
-                if(data.requestID && reqs[data.requestID]){
+                if (data.requestID && reqs[data.requestID]) {
                     let req = reqs[data.requestID].req;
                     let res = reqs[data.requestID].res;
+                    clearTimeout(reqs[data.requestID].timeout);
 
                     res.end(data.body);
                     delete reqs[data.requestID];
@@ -82,7 +82,7 @@ app.ws("/", function (ws, req) {
         }
     });
 
-    ws.on("close", function(){
+    ws.on("close", function () {
         clearInterval(pingInt)
     })
 });
@@ -91,16 +91,20 @@ app.use(express.static("public"));
 
 let provider = new express.Router();
 
-provider.get("*", function(req,res, next){
+provider.get("*", function (req, res, next) {
     let domain = req.baseUrl;
-    domain = domain.replace(/^\//,"");
+    domain = domain.replace(/^\//, "");
     console.log("GET", domain);
     getA(domain).then(ip => {
         if (servers[ip]) {
-            let reqID =  genID();
+            let reqID = genID();
             reqs[reqID] = {
                 req: req,
                 res: res,
+                timeout: setTimeout(()=>{
+                    delete reqs[reqID];
+                    res.status(504).end("Gateway timeout");
+                }, 3000),
             };
             servers[ip].send(JSON.stringify({
                 type: "request",
@@ -111,8 +115,15 @@ provider.get("*", function(req,res, next){
             }))
         }
     })
+        .catch(e => {
+            if (e === "IP not found") {
+                res.status(503).end(e);
+            } else if (e === "Name not found") {
+                res.status(404).end(e);
+            }
+        })
 });
 
-app.use("/:domain.kst/",provider);
+app.use("/:domain.kst/", provider);
 
 app.listen(config.port, () => console.log("Listening"));
